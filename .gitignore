@@ -1,0 +1,12 @@
+# Python bytecode cache
+__pycache__/
+*.pyc
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Generated plots/animations from running the scripts
+*.png
+*.gif

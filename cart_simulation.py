@@ -42,8 +42,7 @@ V = V1 + V2
 
 L = T - V
 
-# Euler-Lagrange equations:
-# le = dL/dq - d/dt(dL/dq_dot)
+# Euler-Lagrange equations: le = dL/dq - d/dt(dL/dq_dot)
 lex = smp.diff(L, x) - smp.diff(smp.diff(L, x_d), t).simplify()
 le1 = smp.diff(L, the1) - smp.diff(smp.diff(L, the1_d), t).simplify()
 le2 = smp.diff(L, the2) - smp.diff(smp.diff(L, the2_d), t).simplify()

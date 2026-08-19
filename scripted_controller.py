@@ -69,4 +69,4 @@ if __name__ == '__main__':
 
     plt.tight_layout()
     plt.savefig('scripted_controller_force.png', dpi=120)
-    print("\nSaved plot to phase3_scripted_controller.png")
+    print("\nSaved plot to scripted_controller_force.png")
