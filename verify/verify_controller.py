@@ -1,7 +1,16 @@
+import os
+import sys
+
 import numpy as np
 import matplotlib.pyplot as plt
 
-from cart_simulation import step, Params
+# See verify_physics.py for why this path fix is needed -- this script
+# moved into verify/, but physics.py and visualize.py live in the root.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ROOT)
+OUTPUT_DIR = os.path.join(_ROOT, 'outputs')
+
+from physics import step, Params
 
 # Phase 3: Run step() with a trivial controller and check the simulator behaves sanely.
 
@@ -68,5 +77,14 @@ if __name__ == '__main__':
     axes[2].legend()
 
     plt.tight_layout()
-    plt.savefig('scripted_controller_force.png', dpi=120)
-    print("\nSaved plot to scripted_controller_force.png")
+    plt.savefig(os.path.join(OUTPUT_DIR, 'verify_controller_force.png'), dpi=120)
+    print("\nSaved plot to outputs/verify_controller_force.png")
+
+    from visualize import animate_trajectory
+
+    animate_trajectory(
+        states_c, dt, l1_val, l2_val,
+        series={'force (N)': forces_c, 'theta1 dev (deg)': np.degrees(states_c[:, 2] - np.pi)},
+        x_max=2.4,
+        save_path=os.path.join(OUTPUT_DIR, 'verify_controller.gif'),
+    )

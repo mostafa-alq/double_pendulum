@@ -1,7 +1,17 @@
+import os
+import sys
+
 import numpy as np
 from scipy.integrate import odeint
 
-from cart_simulation import dSdt, total_energy, Params, step
+# This script lives in verify/, but physics.py and visualize.py live one
+# level up in the project root -- Python only looks in this file's own
+# directory by default, so we have to add the root to sys.path ourselves.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ROOT)
+OUTPUT_DIR = os.path.join(_ROOT, 'outputs')
+
+from physics import dSdt, total_energy, Params, step
 
 # Phase 1 check: with F=0, total energy should stay ~constant.
 # Phase 2 check: the RK4 step() loop should reproduce the odeint trajectory at short horizons, and any long-horizon divergence should be explained by the double pendulum's chaos, not a bug in step().
@@ -53,3 +63,11 @@ print(f'\nChaos check: odeint with theta1 nudged by {eps:.0e} vs. original odein
 print(f'Max abs difference by t=20s: {np.max(chaos_diff):.6e}')
 print('(similar order of magnitude to the RK4-vs-odeint diff above => '
       'divergence is chaos, not a step() bug)')
+
+from visualize import animate_trajectory
+
+animate_trajectory(
+    ans, dt, l1_val, l2_val,
+    series={'total energy': E},
+    save_path=os.path.join(OUTPUT_DIR, 'free_swing.gif'),
+)
