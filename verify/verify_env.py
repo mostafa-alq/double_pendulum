@@ -47,6 +47,7 @@ if __name__ == '__main__':
         states_push, env.dt, env.p.l1, env.p.l2,
         series={'force (N)': forces_push},
         x_max=env.x_max,
+        fixed_camera=True,
         save_path=os.path.join(OUTPUT_DIR, 'cart_env_push.gif'),
     )
 
@@ -66,5 +67,6 @@ if __name__ == '__main__':
             'theta2 dev (deg)': np.degrees(states_p[:, 4] - np.pi),
         },
         x_max=env.x_max,
+        fixed_camera=True,
         save_path=os.path.join(OUTPUT_DIR, 'cart_env_pcontrol.gif'),
     )

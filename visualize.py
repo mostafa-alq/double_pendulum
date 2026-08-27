@@ -4,7 +4,8 @@ from matplotlib import animation
 
 
 def animate_trajectory(states, dt, l1, l2, series=None, x_max=None,
-                        fps=25, save_path='animation.gif', title=None):
+                        fps=25, save_path='animation.gif', title=None,
+                        fixed_camera=False):
     n = len(states)
     stride = max(1, round(1 / (dt * fps)))  # ~real-time playback
     frame_idx = np.arange(0, n, stride)
@@ -32,7 +33,12 @@ def animate_trajectory(states, dt, l1, l2, series=None, x_max=None,
         ax_main.set_title(title)
 
     reach = l1 + l2
-    ax_main.set_xlim(x[0] - reach - 1, x[0] + reach + 1)  # camera follows the cart -- see update()
+    if fixed_camera:
+        if x_max is None:
+            raise ValueError('fixed_camera=True needs x_max, to know how much rail to show')
+        ax_main.set_xlim(-x_max - reach, x_max + reach)
+    else:
+        ax_main.set_xlim(x[0] - reach - 1, x[0] + reach + 1)  # starting point -- update() moves this each frame
     ax_main.set_ylim(-reach - 0.5, reach + 0.5)
 
     ax_main.axhline(0, color='w', lw=1)  # rail
@@ -60,7 +66,8 @@ def animate_trajectory(states, dt, l1, l2, series=None, x_max=None,
         axes_series[-1].set_xlabel('time (s)')
 
     def update(i):
-        ax_main.set_xlim(x[i] - reach - 1, x[i] + reach + 1)  # camera follows the cart
+        if not fixed_camera:
+            ax_main.set_xlim(x[i] - reach - 1, x[i] + reach + 1)  # camera follows the cart
         cart_patch.set_xy((x[i] - cart_w / 2, -cart_h / 2))
         link_line.set_data([x[i], x1[i], x2[i]], [0, y1[i], y2[i]])
         for cursor in cursor_lines:

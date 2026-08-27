@@ -4,11 +4,9 @@ from physics import step as physics_step, Params
 
 
 class CartDoublePendulumEnv:
-    """Gym-style env: force on the cart, goal is to balance near upright."""
-
     def __init__(self, dt=0.01, max_steps=1000, x_max=2.4, max_force=30.0,
                  fall_angle=np.pi / 2, perturb=0.15,
-                 g=9.80665, M=1.0, m1=1.0, m2=1.0, l1=1.5, l2=1.0):
+                 g=9.80665, M=1.0, m1=1.0, m2=1.0, l1=1, l2=1.0):
         self.dt = dt
         self.max_steps = max_steps
         self.x_max = x_max
