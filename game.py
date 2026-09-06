@@ -23,6 +23,8 @@ pixels_per_meter = WIDTH / 16
 
 last_print_time = pg.time.get_ticks()
 dt = 1 / FPS
+MAX_FORCE = 30.0
+X_MAX = 4.0
 
 params = Params(g=8.0665, M=1.0, m1=1.0, m2=1.0, l1=1.0, l2=1.5)
 state = [0, 0, 1, -3, -1, 5]
@@ -61,7 +63,19 @@ while running:
         last_print_time = now
     clock.tick(FPS)
 
-    state = step(state, 0.0, dt, params)
+    keys = pg.key.get_pressed()
+    if keys[pg.K_LEFT]:
+        force = -MAX_FORCE
+    elif keys[pg.K_RIGHT]:
+        force = MAX_FORCE
+    else:
+        force = 0.0
+
+    state = step(state, force, dt, params)
+
+    if abs(state[0]) > X_MAX:
+        state[0] = X_MAX if state[0] > 0 else -X_MAX
+        state[1] = 0  # zero out velocity so it doesn't tunnel back out next frame
 
 
     screen.fill(BG_COLOUR)
