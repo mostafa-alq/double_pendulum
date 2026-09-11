@@ -12,7 +12,7 @@ FPS = 60
 
 # Consts
 FULLSCREEN = False
-DEFAULT_WIDTH, DEFAULT_HEIGHT = (1200, 600)
+DEFAULT_WIDTH, DEFAULT_HEIGHT = (1400, 700)
 WIDTH = pg.display.Info().current_w if FULLSCREEN == True else DEFAULT_WIDTH
 HEIGHT = pg.display.Info().current_h if FULLSCREEN == True else DEFAULT_HEIGHT
 GRAPH_PANEL_WIDTH = 220
@@ -41,7 +41,6 @@ ANGLE_BASE_COLOUR = (100,200,100)
 ANGLE_MID_COLOUR = (230,150,60)
 PHASE_COLOUR = (230,90,60)
 GRID_COLOUR = (70,70,75)
-GRID_DIVISIONS = 4
 
 GRAPH_GAP = 8
 PANEL_HEIGHT = (HEIGHT - GRAPH_GAP * 2) // 3
@@ -74,39 +73,26 @@ def translate_coordinates(x, y):
     pixel_y = HEIGHT // 2 - y * pixels_per_meter
     return int(pixel_x), int(pixel_y)
 
-def draw_line_graph(rect, history, colour, title, value_range=None):
+def draw_radial_gauge(rect, angle_deg, colour, title, tick_step=45):
     pg.draw.rect(screen, GRAPH_BG_COLOUR, rect)
 
-    wrap = None
-    if value_range is not None:
-        lo, hi = value_range
-        wrap = hi - lo
-    elif len(history) >= 2:
-        lo, hi = min(history), max(history)
-    else:
-        lo, hi = 0, 1
-    span = (hi - lo) or 1
+    cx, cy = rect.centerx, rect.centery + 10
+    radius = min(rect.width, rect.height) // 2 - 22
 
-    for i in range(GRID_DIVISIONS + 1):
-        frac = i / GRID_DIVISIONS
-        y = rect.bottom - frac * rect.height
-        pg.draw.line(screen, GRID_COLOUR, (rect.left, y), (rect.right, y), 1)
-        tick_label = small_font.render(f"{lo + frac * span:.0f}", True, GRID_COLOUR)
-        screen.blit(tick_label, (rect.right - tick_label.get_width() - 2, y - 12))
+    pg.draw.circle(screen, GRID_COLOUR, (cx, cy), radius, 2)
+    for tick_deg in range(0, 360, tick_step):
+        tick_rad = math.radians(tick_deg)
+        outer = (cx + radius * math.sin(tick_rad), cy - radius * math.cos(tick_rad))
+        inner = (cx + (radius - 8) * math.sin(tick_rad), cy - (radius - 8) * math.cos(tick_rad))
+        pg.draw.line(screen, GRID_COLOUR, inner, outer, 2)
 
-    if len(history) >= 2:
-        points = []
-        for i, value in enumerate(history):
-            v = (value - lo) % wrap + lo if wrap else value
-            px = rect.left + i / (len(history) - 1) * rect.width
-            py = rect.bottom - (v - lo) / span * rect.height
-            points.append((px, py))
-        pg.draw.lines(screen, colour, False, points, 2)
+    theta = math.radians(angle_deg)
+    needle_end = (cx + radius * 0.85 * math.sin(theta), cy - radius * 0.85 * math.cos(theta))
+    pg.draw.line(screen, colour, (cx, cy), needle_end, 3)
+    pg.draw.circle(screen, colour, (cx, cy), 5)
 
-    latest = history[-1] if history else 0
-    latest = (latest - lo) % wrap + lo if wrap and history else latest
-    value_text = f"{latest:.1f} deg" if history else ""
-    label = font.render(f"{title}  {value_text}", True, RAIL_COLOUR)
+    wrapped_deg = angle_deg % 360
+    label = font.render(f"{title}  {wrapped_deg:.1f} deg", True, RAIL_COLOUR)
     screen.blit(label, (rect.left + 4, rect.top + 2))
 
 def draw_phase_graph(rect, history_x, history_y, colour, title, x_range=None, y_range=None):
@@ -220,10 +206,10 @@ while running:
     screen.blit(force_text, (GAUGE_X, GAUGE_Y + GAUGE_HEIGHT + 5))
 
     # Draw the three graphs
-    draw_line_graph(GRAPH1_RECT, theta1_history, ANGLE_BASE_COLOUR, "Angle base", value_range=(0, 180))
-    draw_line_graph(GRAPH2_RECT, theta2_history, ANGLE_MID_COLOUR, "Angle mid", value_range=(0, 360))
     theta1_now = theta1_history[-1] if theta1_history else 0
     theta2_now = theta2_history[-1] if theta2_history else 0
+    draw_radial_gauge(GRAPH1_RECT, theta1_now, ANGLE_BASE_COLOUR, "Angle base")
+    draw_radial_gauge(GRAPH2_RECT, theta2_now, ANGLE_MID_COLOUR, "Angle mid")
     draw_phase_graph(GRAPH3_RECT, theta1_history, theta2_history, PHASE_COLOUR, "Angle base vs mid",
                       x_range=(theta1_now - 180, theta1_now + 180),
                       y_range=(theta2_now - 180, theta2_now + 180))
