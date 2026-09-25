@@ -16,3 +16,4 @@ env/
 # Training checkpoints and archived runs (regenerate with train.py)
 outputs/*/checkpoints/
 outputs/previous_run/
+outputs/swingup/
