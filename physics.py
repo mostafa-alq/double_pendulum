@@ -56,9 +56,9 @@ print('Sanity check passed: none of the solved accelerations depend on cart posi
 
 # Lambdifyyy
 _args = (t, g, M, m1, m2, l1, l2, the1, the2, the1_d, the2_d, x_d, F)
-dz1dt_f = smp.lambdify(_args, sols[the1_dd])
-dz2dt_f = smp.lambdify(_args, sols[the2_dd])
-dvdt_f = smp.lambdify(_args, sols[x_dd])
+dz1dt_f = smp.lambdify(_args, sols[the1_dd], cse=True)
+dz2dt_f = smp.lambdify(_args, sols[the2_dd], cse=True)
+dvdt_f = smp.lambdify(_args, sols[x_dd], cse=True)
 dthe1dt_f = smp.lambdify(the1_d, the1_d)
 dthe2dt_f = smp.lambdify(the2_d, the2_d)
 dxdt_f = smp.lambdify(x_d, x_d)

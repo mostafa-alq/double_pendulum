@@ -10,3 +10,9 @@ env/
 # Generated plots/animations from running the scripts
 *.png
 *.gif
+!outputs/balance/progress/*.gif
+!outputs/balance/progress/*.png
+
+# Training checkpoints and archived runs (regenerate with train.py)
+outputs/*/checkpoints/
+outputs/previous_run/
