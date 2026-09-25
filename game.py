@@ -1,8 +1,12 @@
 import pygame as pg
 import math
+import os
 from collections import deque
 
+import numpy as np
+
 from physics import step, Params
+from train import load_policy, policy_force
 
 pg.init()
 
@@ -35,6 +39,10 @@ GAUGE_WIDTH, GAUGE_HEIGHT = 200, 16
 pixels_per_meter = MAIN_WIDTH / 16
 GAUGE_X, GAUGE_Y = MAIN_WIDTH // 2 - GAUGE_WIDTH // 2, 20
 
+AI_ON_COLOUR = (150,255,150)
+AI_OFF_COLOUR = (150,150,150)
+POLICY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'outputs', 'balance', 'policy.npz')
+
 GRAPH_BG_COLOUR = (30,30,35)
 GRAPH_HISTORY = 200
 ANGLE_BASE_COLOUR = (100,200,100)
@@ -60,6 +68,10 @@ state = [0, 0, 1, -3, -1, 5]
 trail = deque(maxlen=TRAIL_LENGTH)
 theta1_history = deque(maxlen=GRAPH_HISTORY)
 theta2_history = deque(maxlen=GRAPH_HISTORY)
+
+# Trained balance network, switched on and off with A
+policy = load_policy(POLICY_PATH)
+ai_on = False
 
 # Screen
 pg.display.set_caption('Double Pendulum')
@@ -127,6 +139,14 @@ while running:
         mouse_pos_x, mouse_pos_y = pg.mouse.get_pos()
         if event.type == pg.QUIT:
             running = False
+        if event.type == pg.KEYDOWN and event.key == pg.K_a:
+            ai_on = not ai_on
+        # Stand it back up near the top, since the AI can balance but not swing up
+        if event.type == pg.KEYDOWN and event.key == pg.K_r:
+            state = [0, 0, math.pi + np.random.uniform(-0.1, 0.1), 0, math.pi + np.random.uniform(-0.1, 0.1), 0]
+            trail.clear()
+            theta1_history.clear()
+            theta2_history.clear()
     now = pg.time.get_ticks()
 
     # FPS counter
@@ -135,11 +155,14 @@ while running:
         last_print_time = now
     clock.tick(FPS)
 
+    # Arrow keys always win, so you can shove it while the AI is balancing
     keys = pg.key.get_pressed()
     if keys[pg.K_LEFT]:
         force = -MAX_FORCE
     elif keys[pg.K_RIGHT]:
         force = MAX_FORCE
+    elif ai_on:
+        force = float(policy_force(policy, np.array(state, dtype=float)))
     else:
         # Brake when the user presses nothing
         force = -DAMPING * state[1]
@@ -204,6 +227,12 @@ while running:
 
     force_text = font.render(f"Force: {force:+.1f} N", True, RAIL_COLOUR)
     screen.blit(force_text, (GAUGE_X, GAUGE_Y + GAUGE_HEIGHT + 5))
+
+    # AI status and controls
+    ai_text = font.render(f"AI: {'ON' if ai_on else 'OFF'}", True, AI_ON_COLOUR if ai_on else AI_OFF_COLOUR)
+    screen.blit(ai_text, (10, 10))
+    help_text = small_font.render("A: toggle AI   R: stand it up   Arrows: push", True, AI_OFF_COLOUR)
+    screen.blit(help_text, (10, 34))
 
     # Draw the three graphs
     theta1_now = theta1_history[-1] if theta1_history else 0

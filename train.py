@@ -7,6 +7,7 @@ import time
 import numpy as np
 
 from cart_env import CartDoublePendulumEnv
+from physics import step as physics_step
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -18,20 +19,31 @@ GAME = dict(dt=1 / 60, x_max=4.0, max_force=30.0, damping=15.0,
 TASKS = {
     # Start upright and keep it there
     'balance': dict(
-        env=dict(wall_crash=True), top_start_fraction=0.0,
-        iterations=300, checkpoint_every=10, hidden=64, gamma=0.99, init_std=0.3,
+        env=dict(wall_crash=True), top_start_fraction=0.0, curriculum=None, warm_start=None, critic_warmup=0,
+        actor_lr=3e-4,
+        iterations=300, checkpoint_every=10, hidden=64, gamma=0.99, init_std=0.3, min_std=0.0,
         eval_seconds=60, eval_hold=30,
         render_start=[0.0, 0.0, np.pi + 0.1, 0.0, np.pi - 0.05, 0.0], render_seconds=8,
         render_iterations=[0, 30, 60, 90, 140, 230],
     ),
     # Start at the bottom, swing up and balance
     'swingup': dict(
-        env=dict(start_angle=0.0, perturb=0.1, fall_angle=np.inf, max_steps=1200, wall_crash=True),
-        # Some start near the top so it learns balancing beats spinning
-        top_start_fraction=0.25,
-        iterations=1500, checkpoint_every=25, hidden=256, gamma=0.995, init_std=0.5,
-        eval_seconds=20, eval_hold=5,
-        render_start=[0.0, 0.0, 0.05, 0.0, -0.05, 0.0], render_seconds=15,
+        # Hitting the wall or dropping it after catching it ends the episode, energy away from the
+        # balanced top costs points, and a stronger pull to the middle.
+        # The alive bonus keeps every step at zero or above so ending early never pays
+        env=dict(start_angle=0.0, perturb=0.1, fall_after_catch=True, max_steps=1800, wall_crash=True,
+                 energy_cost=1.0, center_cost=1.0, alive_bonus=5.0),
+        # Some start near the top so it keeps practising the balance
+        top_start_fraction=0.2,
+        # Starts are reversed falls from the top, level is how many seconds of fall, growing each pass
+        curriculum=dict(start=0.1, growth=1.25, end=20.0, pass_rate=0.7, pool=2048, rewarm=10),
+        # Trained from scratch, since the balance network sits on a knife edge that any update knocks off
+        warm_start=None, critic_warmup=0, actor_lr=3e-4,
+        iterations=5000, checkpoint_every=25, hidden=64, gamma=0.99, init_std=0.3,
+        # Noise never drops below this so it keeps exploring and stays smooth
+        min_std=0.1,
+        eval_seconds=30, eval_hold=5,
+        render_start=[0.0, 0.0, 0.05, 0.0, -0.05, 0.0], render_seconds=30,
         render_iterations=[0, 250, 500, 750, 1000, 1500],
     ),
 }
@@ -133,9 +145,24 @@ def observe(state):
                      np.sin(the2), np.cos(the2), z2 / 10], axis=-1)
 
 
-# Reset pendulums, putting some of them near the top
-def reset_envs(env, idx, rng, top_fraction):
+# Fall from the top for some seconds while braking the cart, then flip every velocity.
+# Played backwards the same pushes carry it back up, so every start has a known way to the top
+def reverse_starts(env, n, seconds, rng):
+    S = np.zeros((6, n))
+    S[2] = np.pi + rng.uniform(-0.05, 0.05, n)
+    S[4] = np.pi + rng.uniform(-0.05, 0.05, n)
+    for _ in range(int(seconds / env.dt)):
+        F = np.clip(-5 * S[0] - GAME['damping'] * S[1] + rng.normal(0, 3, n), -env.max_force, env.max_force)
+        S = physics_step(S, F, env.dt, env.p)
+    S[[1, 3, 5]] *= -1
+    return S
+
+
+# Reset pendulums, from a pool of starts if given, with some kept near the top
+def reset_envs(env, idx, rng, top_fraction, pool=None):
     env.reset(idx)
+    if pool is not None:
+        env.state[:, idx] = pool[:, rng.integers(pool.shape[1], size=len(idx))]
     top = idx[rng.random(len(idx)) < top_fraction]
     env.state[2, top] = np.pi + rng.uniform(-0.15, 0.15, len(top))
     env.state[4, top] = np.pi + rng.uniform(-0.15, 0.15, len(top))
@@ -217,10 +244,13 @@ def evaluate(task, actor, n=200, seed=123):
 
 
 # Returns success rate, seconds upright and how many touched the wall. Success means upright at the end and never touching the wall
-def run_eval(task, actor, n, seed):
+def run_eval(task, actor, n, seed, pool=None):
     cfg = TASKS[task]
-    env = make_env(task, n, np.random.default_rng(seed), max_steps=10 ** 9, wall_crash=False)
+    rng = np.random.default_rng(seed)
+    env = make_env(task, n, rng, max_steps=10 ** 9, wall_crash=False)
     state = env.reset()
+    if pool is not None:
+        state = reset_envs(env, np.arange(n), rng, 0.0, pool)
     steps = int(cfg['eval_seconds'] / env.dt)
     hold_from = steps - int(cfg['eval_hold'] / env.dt)
     ok = np.ones(n, dtype=bool)
@@ -259,10 +289,13 @@ def train(task, seed=0):
     gamma = cfg['gamma']
     rng = np.random.default_rng(seed)
     env = make_env(task, N_ENVS, rng)
-    actor = MLP(N_OBS, cfg['hidden'], 1, rng, out_scale=0.01)
+    if cfg['warm_start']:
+        actor = load_policy(paths(cfg['warm_start'])['policy'])
+    else:
+        actor = MLP(N_OBS, cfg['hidden'], 1, rng, out_scale=0.01)
     actor.params['log_std'] = np.array([np.log(cfg['init_std'])])
     critic = MLP(N_OBS, cfg['hidden'], 1, rng)
-    actor_opt = Adam(actor.params, LR)
+    actor_opt = Adam(actor.params, cfg['actor_lr'])
     critic_opt = Adam(critic.params, LR)
 
     # Log file
@@ -271,10 +304,15 @@ def train(task, seed=0):
     log_file = open(out['log'], 'w', newline='')
     log = csv.writer(log_file)
     log.writerow(['iteration', 'env_steps', 'episode_return', 'episode_seconds', 'upright_seconds',
-                  'eval_success', 'eval_upright_seconds', 'noise_std', 'wall_seconds'])
+                  'eval_success', 'eval_upright_seconds', 'level', 'level_success', 'noise_std', 'wall_seconds'])
 
     top_fraction = cfg['top_start_fraction']
-    obs = observe(reset_envs(env, np.arange(N_ENVS), rng, top_fraction))
+    cur = cfg['curriculum']
+    level = cur['start'] if cur else None
+    pool = reverse_starts(env, cur['pool'], level, rng) if cur else None
+    obs = observe(reset_envs(env, np.arange(N_ENVS), rng, top_fraction, pool))
+    # The actor waits until the critic's guesses are good, or it learns from bad ones and falls apart
+    actor_frozen_until = cfg['critic_warmup']
     ep_return = np.zeros(N_ENVS)
     ep_len = np.zeros(N_ENVS)
     ep_upright = np.zeros(N_ENVS)
@@ -315,7 +353,7 @@ def train(task, seed=0):
                 ep_return[idx] = 0
                 ep_len[idx] = 0
                 ep_upright[idx] = 0
-                next_obs[idx] = observe(reset_envs(env, idx, rng, top_fraction)[:, idx])
+                next_obs[idx] = observe(reset_envs(env, idx, rng, top_fraction, pool)[:, idx])
             obs = next_obs
 
         # Advantages, how much better each action did than the critic expected
@@ -341,9 +379,12 @@ def train(task, seed=0):
             perm = rng.permutation(len(f_adv))
             for s in range(0, len(perm), MINIBATCH):
                 mb = perm[s:s + MINIBATCH]
-                _, g = actor_loss_and_grads(actor, f_obs[mb], f_act[mb], f_logp[mb], f_adv[mb])
-                clip_grad_norm(g, MAX_GRAD_NORM)
-                actor_opt.step(g)
+                if it > actor_frozen_until:
+                    _, g = actor_loss_and_grads(actor, f_obs[mb], f_act[mb], f_logp[mb], f_adv[mb])
+                    clip_grad_norm(g, MAX_GRAD_NORM)
+                    actor_opt.step(g)
+                    if cfg['min_std']:
+                        actor.params['log_std'][:] = np.maximum(actor.params['log_std'], np.log(cfg['min_std']))
                 _, g = critic_loss_and_grads(critic, f_obs[mb], f_ret[mb])
                 clip_grad_norm(g, MAX_GRAD_NORM)
                 critic_opt.step(g)
@@ -357,17 +398,33 @@ def train(task, seed=0):
                 mean_ret = mean_len = mean_up = float('nan')
             std = np.exp(actor.params['log_std'][0])
             eval_success, eval_up, _ = run_eval(task, actor, n=32, seed=it)
+            # How well the critic predicts returns, 1 is perfect and 0 is no better than the average
+            critic_fit = 1 - np.var(f_ret - b_val.ravel()) / (np.var(f_ret) + 1e-8)
+
+            # Test at the current level and make the falls longer if it passes
+            level_now, level_success = float('nan'), float('nan')
+            if cur:
+                level_now = level
+                level_success = run_eval(task, actor, n=64, seed=it, pool=pool)[0]
+                if level_success >= cur['pass_rate'] and level < cur['end']:
+                    level = min(level * cur['growth'], cur['end'])
+                    pool = reverse_starts(env, cur['pool'], level, rng)
+                    # New starts, so give the critic time to catch up again
+                    actor_frozen_until = max(actor_frozen_until, it + cur['rewarm'])
+
             elapsed = time.time() - start_time
             steps_done = it * ROLLOUT * N_ENVS
             log.writerow([it, steps_done, f'{mean_ret:.2f}', f'{mean_len * env.dt:.3f}',
                           f'{mean_up * env.dt:.3f}', f'{eval_success:.3f}', f'{eval_up:.3f}',
-                          f'{std:.4f}', f'{elapsed:.0f}'])
+                          f'{level_now:.2f}', f'{level_success:.3f}', f'{std:.4f}', f'{elapsed:.0f}'])
             log_file.flush()
             save_policy(actor, checkpoint_path(task, it))
             save_policy(actor, out['policy'])
+            level_text = f'level {level_now:5.2f}s pass {level_success:4.0%}  ' if cur else ''
             print(f'iter {it:4d}  steps {steps_done:8d}  episode return {mean_ret:8.1f}  '
                   f'upright {mean_up * env.dt:5.2f}s  test: upright {eval_up:5.2f}s, '
-                  f'success {eval_success:4.0%}  noise std {std:.3f}  {elapsed:5.0f}s', flush=True)
+                  f'success {eval_success:4.0%}  {level_text}critic fit {critic_fit:5.2f}  noise std {std:.3f}  '
+                  f'{elapsed:5.0f}s', flush=True)
 
     log_file.close()
     return actor
