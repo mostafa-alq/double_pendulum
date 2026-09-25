@@ -10,12 +10,13 @@ from cart_env import CartDoublePendulumEnv
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
-# Must match game.py so the trained policy controls the same pendulum you play with
+# Game settings, keep these the same as game.py
 GAME = dict(dt=1 / 60, x_max=4.0, max_force=30.0, damping=15.0,
             g=8.0665, M=1.0, m1=1.0, m2=1.0, l1=1.0, l2=1.5)
 
+# Settings for each task
 TASKS = {
-    # Start near upright and keep it there; episodes end when it falls
+    # Start upright and keep it there
     'balance': dict(
         env=dict(wall_crash=True), top_start_fraction=0.0,
         iterations=300, checkpoint_every=10, hidden=64, gamma=0.99, init_std=0.3,
@@ -23,11 +24,10 @@ TASKS = {
         render_start=[0.0, 0.0, np.pi + 0.1, 0.0, np.pi - 0.05, 0.0], render_seconds=8,
         render_iterations=[0, 30, 60, 90, 140, 230],
     ),
-    # Start hanging at the bottom, swing up, then balance; episodes run for a fixed 20 s.
-    # A quarter of training episodes start near the top instead: without them it learns to spin
-    # the pendulum round and round, because it never discovers that stopping at the top pays more.
+    # Start at the bottom, swing up and balance
     'swingup': dict(
         env=dict(start_angle=0.0, perturb=0.1, fall_angle=np.inf, max_steps=1200, wall_crash=True),
+        # Some start near the top so it learns balancing beats spinning
         top_start_fraction=0.25,
         iterations=1500, checkpoint_every=25, hidden=256, gamma=0.995, init_std=0.5,
         eval_seconds=20, eval_hold=5,
@@ -36,6 +36,7 @@ TASKS = {
     ),
 }
 
+# Consts
 N_ENVS = 128
 ROLLOUT = 128
 LAMBDA = 0.95
@@ -50,6 +51,7 @@ UPRIGHT_ANGLE = 0.3
 LOG_2PI = np.log(2 * np.pi)
 
 
+# Output folders for a task
 def paths(task):
     base = os.path.join(ROOT, 'outputs', task)
     return {
@@ -60,11 +62,10 @@ def paths(task):
     }
 
 
-# ---- The network: neural.py's input -> hidden -> ReLU -> output, rewritten with numpy matrices ----
-# Weights are (inputs, neurons), the transpose of neural.py's w[neuron][input],
-# so a whole batch of rows goes through a layer with one matrix multiply.
+# Network, same as neural.py but with numpy matrices
 class MLP:
     def __init__(self, n_in, n_hidden, n_out, rng, out_scale=1.0):
+        # Weights are (inputs, neurons), flipped from neural.py
         self.params = {
             'w1': rng.normal(0, np.sqrt(2 / n_in), (n_in, n_hidden)),
             'b1': np.zeros(n_hidden),
@@ -79,7 +80,7 @@ class MLP:
         out = hidden @ p['w2'] + p['b2']
         return out, (x, pre, hidden)
 
-    # Same maths as neural.py's derivatives(), given d_out = how the loss changes per nudge to each output
+    # Same maths as derivatives() in neural.py
     def backward(self, cache, d_out):
         x, pre, hidden = cache
         p = self.params
@@ -92,7 +93,7 @@ class MLP:
         }
 
 
-# Gradient descent with a per-parameter adaptive step size; updates the arrays in place
+# Adam optimiser, gradient descent with a step size per weight
 class Adam:
     def __init__(self, params, lr, beta1=0.9, beta2=0.999, eps=1e-8):
         self.params = params
@@ -104,6 +105,7 @@ class Adam:
     def step(self, grads):
         self.t += 1
         for k, g in grads.items():
+            # Running averages of the gradient and its square
             self.m[k] = self.beta1 * self.m[k] + (1 - self.beta1) * g
             self.v[k] = self.beta2 * self.v[k] + (1 - self.beta2) * g ** 2
             m_hat = self.m[k] / (1 - self.beta1 ** self.t)
@@ -111,6 +113,7 @@ class Adam:
             self.params[k] -= self.lr * m_hat / (np.sqrt(v_hat) + self.eps)
 
 
+# Shrink the gradients if they get too big
 def clip_grad_norm(grads, max_norm):
     norm = np.sqrt(sum(np.sum(g ** 2) for g in grads.values()))
     if norm > max_norm:
@@ -118,19 +121,19 @@ def clip_grad_norm(grads, max_norm):
             grads[k] = grads[k] * (max_norm / norm)
 
 
-# ---- Environment helpers ----
+# Environment helpers
 def make_env(task, n, rng, **overrides):
     return CartDoublePendulumEnv(n=n, rng=rng, **{**GAME, **TASKS[task]['env'], **overrides})
 
 
-# What the policy sees: angles as sin/cos so there's no wrap-around seam, everything roughly -1..1
+# What the policy sees, angles as sin and cos so there's no wrap around
 def observe(state):
     x, v, the1, z1, the2, z2 = state
     return np.stack([x / GAME['x_max'], v / 5, np.sin(the1), np.cos(the1), z1 / 10,
                      np.sin(the2), np.cos(the2), z2 / 10], axis=-1)
 
 
-# Resets the chosen pendulums, moving a random top_fraction of them to near upright
+# Reset pendulums, putting some of them near the top
 def reset_envs(env, idx, rng, top_fraction):
     env.reset(idx)
     top = idx[rng.random(len(idx)) < top_fraction]
@@ -139,21 +142,20 @@ def reset_envs(env, idx, rng, top_fraction):
     return env.state.copy()
 
 
-# Both links within UPRIGHT_ANGLE of pointing straight up
+# True when both links are close to upright
 def upright(state):
     dev1 = (state[2] % (2 * np.pi)) - np.pi
     dev2 = (state[4] % (2 * np.pi)) - np.pi
     return (np.abs(dev1) < UPRIGHT_ANGLE) & (np.abs(dev2) < UPRIGHT_ANGLE)
 
 
-# ---- PPO ----
+# PPO
 def gaussian_logp(a, mu, log_std):
     z = (a - mu) / np.exp(log_std)
     return -0.5 * z ** 2 - log_std - 0.5 * LOG_2PI
 
 
-# PPO's clipped objective: push up the probability of actions that did better than expected,
-# but stop once the policy has moved more than CLIP away from the one that collected the data
+# Actor loss, favours actions that did better than expected
 def actor_loss_and_grads(actor, obs, act, logp_old, adv):
     out, cache = actor.forward(obs)
     mu = out[:, 0]
@@ -165,6 +167,7 @@ def actor_loss_and_grads(actor, obs, act, logp_old, adv):
     s2 = np.clip(ratio, 1 - CLIP, 1 + CLIP) * adv
     loss = -np.mean(np.minimum(s1, s2))
 
+    # Gradients
     d_logp = -(adv * ratio * (s1 <= s2)) / len(adv)
     d_mu = d_logp * (act - mu) / std ** 2
     grads = actor.backward(cache, d_mu[:, None])
@@ -172,6 +175,7 @@ def actor_loss_and_grads(actor, obs, act, logp_old, adv):
     return loss, grads
 
 
+# Critic loss, squared error against the actual returns
 def critic_loss_and_grads(critic, obs, returns):
     out, cache = critic.forward(obs)
     err = out[:, 0] - returns
@@ -180,15 +184,18 @@ def critic_loss_and_grads(critic, obs, returns):
     return loss, grads
 
 
+# Critic's guess of how good a state is
 def value(critic, obs):
     return critic.forward(obs)[0][:, 0]
 
 
+# Force the trained policy applies, no noise
 def policy_force(actor, state):
     mu = actor.forward(observe(state))[0][..., 0]
     return GAME['max_force'] * np.clip(mu, -1, 1)
 
 
+# Saving and loading
 def checkpoint_path(task, iteration):
     return os.path.join(paths(task)['checkpoints'], f'iter_{iteration:04d}.npz')
 
@@ -204,15 +211,12 @@ def load_policy(path):
     return actor
 
 
-# Runs the policy's mean force (no noise) and returns the fraction of pendulums that stayed
-# upright for the whole final eval_hold seconds of an eval_seconds run
+# Success rate from the task's normal start
 def evaluate(task, actor, n=200, seed=123):
     return run_eval(task, actor, n, seed)[0]
 
 
-# Returns (success rate, average seconds upright, share that touched the wall), always from the
-# task's normal start (the bottom, for swing-up). Success = never touched the wall and stayed
-# upright for the whole final eval_hold seconds.
+# Returns success rate, seconds upright and how many touched the wall. Success means upright at the end and never touching the wall
 def run_eval(task, actor, n, seed):
     cfg = TASKS[task]
     env = make_env(task, n, np.random.default_rng(seed), max_steps=10 ** 9, wall_crash=False)
@@ -232,7 +236,7 @@ def run_eval(task, actor, n, seed):
     return (ok & ~touched).mean(), upright_steps.mean() * env.dt, touched.mean()
 
 
-# PPO can get worse late in training, so test every checkpoint and keep the best as policy.npz
+# Keep the best checkpoint since PPO can get worse near the end
 def select_best(task, n=100, seed=321):
     out = paths(task)
     files = sorted(f for f in os.listdir(out['checkpoints']) if f.endswith('.npz'))
@@ -247,7 +251,9 @@ def select_best(task, n=100, seed=321):
     return best_file
 
 
+# Training loop
 def train(task, seed=0):
+    # Setup
     cfg = TASKS[task]
     out = paths(task)
     gamma = cfg['gamma']
@@ -259,6 +265,7 @@ def train(task, seed=0):
     actor_opt = Adam(actor.params, LR)
     critic_opt = Adam(critic.params, LR)
 
+    # Log file
     os.makedirs(out['checkpoints'], exist_ok=True)
     save_policy(actor, checkpoint_path(task, 0))
     log_file = open(out['log'], 'w', newline='')
@@ -278,7 +285,9 @@ def train(task, seed=0):
         b_obs = np.zeros((ROLLOUT, N_ENVS, N_OBS))
         b_act, b_logp, b_rew, b_done, b_val = (np.zeros((ROLLOUT, N_ENVS)) for _ in range(5))
 
+        # Collect a rollout
         for t in range(ROLLOUT):
+            # Noisy force from the policy
             mu = actor.forward(obs)[0][:, 0]
             log_std = actor.params['log_std'][0]
             act = mu + np.exp(log_std) * rng.standard_normal(N_ENVS)
@@ -292,12 +301,14 @@ def train(task, seed=0):
             ep_len += 1
             ep_upright += upright(state)
 
+            # Timed out episodes get the critic's guess of what came next
             r = reward * REWARD_SCALE
             truncated = info['timeout'] & ~info['fell'] & ~info['crashed']
             if truncated.any():
                 r[truncated] += gamma * value(critic, next_obs[truncated])
             b_rew[t], b_done[t] = r, done
 
+            # Reset finished pendulums
             if done.any():
                 idx = np.flatnonzero(done)
                 recent.extend(zip(ep_return[idx], ep_len[idx], ep_upright[idx]))
@@ -307,6 +318,7 @@ def train(task, seed=0):
                 next_obs[idx] = observe(reset_envs(env, idx, rng, top_fraction)[:, idx])
             obs = next_obs
 
+        # Advantages, how much better each action did than the critic expected
         adv = np.zeros_like(b_rew)
         gae = 0.0
         next_val = value(critic, obs)
@@ -318,11 +330,13 @@ def train(task, seed=0):
             next_val = b_val[t]
         returns = adv + b_val
 
+        # Flatten and normalise
         f_obs = b_obs.reshape(-1, N_OBS)
         f_act, f_logp, f_ret = b_act.ravel(), b_logp.ravel(), returns.ravel()
         f_adv = adv.ravel()
         f_adv = (f_adv - f_adv.mean()) / (f_adv.std() + 1e-8)
 
+        # Update actor and critic
         for _ in range(EPOCHS):
             perm = rng.permutation(len(f_adv))
             for s in range(0, len(perm), MINIBATCH):
@@ -334,6 +348,7 @@ def train(task, seed=0):
                 clip_grad_norm(g, MAX_GRAD_NORM)
                 critic_opt.step(g)
 
+        # Checkpoint, log and print
         if it % cfg['checkpoint_every'] == 0:
             recent = recent[-200:]
             if recent:
@@ -358,7 +373,7 @@ def train(task, seed=0):
     return actor
 
 
-# Saves one GIF per checkpoint, all starting from the same state, plus a learning curve from the log
+# One GIF per checkpoint plus the learning curve
 def render(task, iterations):
     import matplotlib
     matplotlib.use('Agg')
@@ -373,6 +388,7 @@ def render(task, iterations):
     steps_at[0] = 0
 
     for it in iterations:
+        # Same starting position every time so the GIFs compare fairly
         actor = load_policy(checkpoint_path(task, it))
         env = make_env(task, None, np.random.default_rng(0), max_steps=10 ** 9)
         env.reset()
@@ -390,6 +406,7 @@ def render(task, iterations):
                            title=f'{task}: iteration {it} ({steps_at.get(it, 0):,} simulation steps)')
         print(f'saved {path}')
 
+    # Learning curve
     column = next(c for c in ('eval_upright_seconds', 'upright_seconds', 'episode_seconds') if c in rows[0])
     fig, ax = plt.subplots(figsize=(8, 4))
     ax.plot([int(r['env_steps']) for r in rows], [float(r[column]) for r in rows])
@@ -401,6 +418,7 @@ def render(task, iterations):
     print('saved learning curve')
 
 
+# Command line outputs
 if __name__ == '__main__':
     args = sys.argv[1:]
     if len(args) >= 2 and args[0] == 'render' and args[1] in TASKS:
