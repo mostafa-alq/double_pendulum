@@ -12,7 +12,7 @@ from physics import step as physics_step
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
 # Game settings, keep these the same as game.py
-GAME = dict(dt=1 / 60, x_max=4.0, max_force=30.0, damping=15.0,
+GAME = dict(dt=1 / 60, x_max=6.0, max_force=30.0, damping=15.0,
             g=8.0665, M=1.0, m1=1.0, m2=1.0, l1=1.0, l2=1.5)
 
 # Settings for each task
@@ -21,10 +21,10 @@ TASKS = {
     'balance': dict(
         env=dict(wall_crash=True), top_start_fraction=0.0, curriculum=None, warm_start=None, critic_warmup=0,
         actor_lr=3e-4,
-        iterations=300, checkpoint_every=10, hidden=64, gamma=0.99, init_std=0.3, min_std=0.0,
+        iterations=300, checkpoint_every=10, hidden=64, layers=1, gamma=0.99, init_std=0.3, min_std=0.0,
         eval_seconds=60, eval_hold=30,
         render_start=[0.0, 0.0, np.pi + 0.1, 0.0, np.pi - 0.05, 0.0], render_seconds=8,
-        render_iterations=[0, 30, 60, 90, 140, 230],
+        render_iterations=[0, 40, 80, 110, 140, 250],
     ),
     # Start at the bottom, swing up and balance
     'swingup': dict(
@@ -39,12 +39,13 @@ TASKS = {
         curriculum=dict(start=0.1, growth=1.25, end=20.0, pass_rate=0.7, pool=2048, rewarm=10),
         # Trained from scratch, since the balance network sits on a knife edge that any update knocks off
         warm_start=None, critic_warmup=0, actor_lr=3e-4,
-        iterations=5000, checkpoint_every=25, hidden=64, gamma=0.99, init_std=0.3,
+        # Two hidden layers, since swinging up, catching and stopping the cart is a lot for one
+        iterations=5000, checkpoint_every=25, hidden=64, layers=2, gamma=0.99, init_std=0.3,
         # Noise never drops below this so it keeps exploring and stays smooth
         min_std=0.1,
         eval_seconds=30, eval_hold=5,
         render_start=[0.0, 0.0, 0.05, 0.0, -0.05, 0.0], render_seconds=30,
-        render_iterations=[0, 250, 500, 750, 1000, 1500],
+        render_iterations=[0, 400, 1225, 2600, 4400, 5000],
     ),
 }
 
@@ -74,35 +75,44 @@ def paths(task):
     }
 
 
-# Network, same as neural.py but with numpy matrices
+# Network, same as neural.py but with numpy matrices and any number of hidden layers
 class MLP:
-    def __init__(self, n_in, n_hidden, n_out, rng, out_scale=1.0):
+    def __init__(self, n_in, n_hidden, n_out, rng, out_scale=1.0, n_layers=1):
+        sizes = [n_in] + [n_hidden] * n_layers + [n_out]
+        self.depth = len(sizes) - 1
         # Weights are (inputs, neurons), flipped from neural.py
-        self.params = {
-            'w1': rng.normal(0, np.sqrt(2 / n_in), (n_in, n_hidden)),
-            'b1': np.zeros(n_hidden),
-            'w2': rng.normal(0, out_scale / np.sqrt(n_hidden), (n_hidden, n_out)),
-            'b2': np.zeros(n_out),
-        }
+        self.params = {}
+        for i in range(self.depth):
+            last = i == self.depth - 1
+            std = out_scale / np.sqrt(sizes[i]) if last else np.sqrt(2 / sizes[i])
+            self.params[f'w{i + 1}'] = rng.normal(0, std, (sizes[i], sizes[i + 1]))
+            self.params[f'b{i + 1}'] = np.zeros(sizes[i + 1])
 
     def forward(self, x):
         p = self.params
-        pre = x @ p['w1'] + p['b1']
-        hidden = np.maximum(pre, 0)
-        out = hidden @ p['w2'] + p['b2']
-        return out, (x, pre, hidden)
+        inputs, pres = [x], []
+        h = x
+        for i in range(1, self.depth + 1):
+            z = h @ p[f'w{i}'] + p[f'b{i}']
+            if i == self.depth:
+                return z, (inputs, pres)
+            # ReLU on every layer except the output
+            pres.append(z)
+            h = np.maximum(z, 0)
+            inputs.append(h)
 
-    # Same maths as derivatives() in neural.py
+    # Same maths as derivatives() in neural.py, walking back one layer at a time
     def backward(self, cache, d_out):
-        x, pre, hidden = cache
+        inputs, pres = cache
         p = self.params
-        d_pre = (d_out @ p['w2'].T) * (pre > 0)
-        return {
-            'w2': hidden.T @ d_out,
-            'b2': d_out.sum(0),
-            'w1': x.T @ d_pre,
-            'b1': d_pre.sum(0),
-        }
+        grads = {}
+        d = d_out
+        for i in range(self.depth, 0, -1):
+            grads[f'w{i}'] = inputs[i - 1].T @ d
+            grads[f'b{i}'] = d.sum(0)
+            if i > 1:
+                d = (d @ p[f'w{i}'].T) * (pres[i - 2] > 0)
+        return grads
 
 
 # Adam optimiser, gradient descent with a step size per weight
@@ -236,7 +246,8 @@ def save_policy(actor, path):
 
 def load_policy(path):
     data = np.load(path)
-    actor = MLP(N_OBS, data['w1'].shape[1], 1, np.random.default_rng(0))
+    n_layers = sum(1 for k in data.files if k.startswith('w')) - 1
+    actor = MLP(N_OBS, data['w1'].shape[1], 1, np.random.default_rng(0), n_layers=n_layers)
     actor.params = {k: data[k] for k in data.files}
     return actor
 
@@ -295,9 +306,9 @@ def train(task, seed=0):
     if cfg['warm_start']:
         actor = load_policy(paths(cfg['warm_start'])['policy'])
     else:
-        actor = MLP(N_OBS, cfg['hidden'], 1, rng, out_scale=0.01)
+        actor = MLP(N_OBS, cfg['hidden'], 1, rng, out_scale=0.01, n_layers=cfg['layers'])
     actor.params['log_std'] = np.array([np.log(cfg['init_std'])])
-    critic = MLP(N_OBS, cfg['hidden'], 1, rng)
+    critic = MLP(N_OBS, cfg['hidden'], 1, rng, n_layers=cfg['layers'])
     actor_opt = Adam(actor.params, cfg['actor_lr'])
     critic_opt = Adam(critic.params, LR)
 

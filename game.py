@@ -41,7 +41,7 @@ GAUGE_X, GAUGE_Y = MAIN_WIDTH // 2 - GAUGE_WIDTH // 2, 20
 
 AI_ON_COLOUR = (150,255,150)
 AI_OFF_COLOUR = (150,150,150)
-POLICY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'outputs', 'balance', 'policy.npz')
+OUTPUTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'outputs')
 
 GRAPH_BG_COLOUR = (30,30,35)
 GRAPH_HISTORY = 200
@@ -60,7 +60,7 @@ GRAPH3_RECT = pg.Rect(MAIN_WIDTH, (PANEL_HEIGHT + GRAPH_GAP) * 2, GRAPH_PANEL_WI
 last_print_time = pg.time.get_ticks()
 dt = 1 / FPS
 MAX_FORCE = 30.0
-X_MAX = 4.0
+X_MAX = 6.0
 DAMPING = 15.0
 
 params = Params(g=8.0665, M=1.0, m1=1.0, m2=1.0, l1=1.0, l2=1.5)
@@ -69,9 +69,12 @@ trail = deque(maxlen=TRAIL_LENGTH)
 theta1_history = deque(maxlen=GRAPH_HISTORY)
 theta2_history = deque(maxlen=GRAPH_HISTORY)
 
-# Trained balance network, switched on and off with A
-policy = load_policy(POLICY_PATH)
-ai_on = False
+# Trained networks, A for balance and S for swing-up, pressing the same key again turns it off
+policies = {
+    'balance': load_policy(os.path.join(OUTPUTS, 'balance', 'policy.npz')),
+    'swingup': load_policy(os.path.join(OUTPUTS, 'swingup', 'policy.npz')),
+}
+ai_mode = None
 
 # Screen
 pg.display.set_caption('Double Pendulum')
@@ -140,10 +143,13 @@ while running:
         if event.type == pg.QUIT:
             running = False
         if event.type == pg.KEYDOWN and event.key == pg.K_a:
-            ai_on = not ai_on
-        # Stand it back up near the top, since the AI can balance but not swing up
-        if event.type == pg.KEYDOWN and event.key == pg.K_r:
-            state = [0, 0, math.pi + np.random.uniform(-0.1, 0.1), 0, math.pi + np.random.uniform(-0.1, 0.1), 0]
+            ai_mode = None if ai_mode == 'balance' else 'balance'
+        if event.type == pg.KEYDOWN and event.key == pg.K_s:
+            ai_mode = None if ai_mode == 'swingup' else 'swingup'
+        # R stands it up near the top, H drops it to hanging still at the bottom
+        if event.type == pg.KEYDOWN and event.key in (pg.K_r, pg.K_h):
+            angle = math.pi if event.key == pg.K_r else 0.0
+            state = [0, 0, angle + np.random.uniform(-0.1, 0.1), 0, angle + np.random.uniform(-0.1, 0.1), 0]
             trail.clear()
             theta1_history.clear()
             theta2_history.clear()
@@ -161,8 +167,8 @@ while running:
         force = -MAX_FORCE
     elif keys[pg.K_RIGHT]:
         force = MAX_FORCE
-    elif ai_on:
-        force = float(policy_force(policy, np.array(state, dtype=float)))
+    elif ai_mode:
+        force = float(policy_force(policies[ai_mode], np.array(state, dtype=float)))
     else:
         # Brake when the user presses nothing
         force = -DAMPING * state[1]
@@ -176,8 +182,8 @@ while running:
     screen.fill(BG_COLOUR)
 
     # Draw rail
-    pg.draw.line(screen, RAIL_COLOUR, translate_coordinates(-4, 0), translate_coordinates(4, 0), 6)
-    for meter in range(-4, 5):
+    pg.draw.line(screen, RAIL_COLOUR, translate_coordinates(-X_MAX, 0), translate_coordinates(X_MAX, 0), 6)
+    for meter in range(-int(X_MAX), int(X_MAX) + 1):
         tick_top = translate_coordinates(meter, 0.15)
         tick_bottom = translate_coordinates(meter, -0.15)
         pg.draw.line(screen, RAIL_TICK_COLOUR, tick_top, tick_bottom, 2)
@@ -229,9 +235,11 @@ while running:
     screen.blit(force_text, (GAUGE_X, GAUGE_Y + GAUGE_HEIGHT + 5))
 
     # AI status and controls
-    ai_text = font.render(f"AI: {'ON' if ai_on else 'OFF'}", True, AI_ON_COLOUR if ai_on else AI_OFF_COLOUR)
+    mode_name = {None: 'OFF', 'balance': 'BALANCE', 'swingup': 'SWING-UP'}[ai_mode]
+    ai_text = font.render(f"AI: {mode_name}", True, AI_ON_COLOUR if ai_mode else AI_OFF_COLOUR)
     screen.blit(ai_text, (10, 10))
-    help_text = small_font.render("A: toggle AI   R: stand it up   Arrows: push", True, AI_OFF_COLOUR)
+    help_text = small_font.render("A: balance AI   S: swing-up AI   R: stand it up   H: hang it down   Arrows: push",
+                                  True, AI_OFF_COLOUR)
     screen.blit(help_text, (10, 34))
 
     # Draw the three graphs

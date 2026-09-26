@@ -30,18 +30,17 @@ def check(label, net, loss_and_grads):
 
 rng = np.random.default_rng(1)
 
-# Check 1: the network's backprop on a plain squared-error loss
-net = MLP(8, 16, 3, rng)
+# Check 1: the network's backprop on a plain squared-error loss, with one and with two hidden layers
 x = rng.normal(size=(20, 8))
 targets = rng.normal(size=(20, 3))
+for n_layers in (1, 2):
+    net = MLP(8, 16, 3, rng, n_layers=n_layers)
 
+    def mse_loss_and_grads():
+        out, cache = net.forward(x)
+        return np.mean(np.sum((out - targets) ** 2, axis=1)), net.backward(cache, 2 * (out - targets) / len(x))
 
-def mse_loss_and_grads():
-    out, cache = net.forward(x)
-    return np.mean(np.sum((out - targets) ** 2, axis=1)), net.backward(cache, 2 * (out - targets) / len(x))
-
-
-check('mlp', net, mse_loss_and_grads)
+    check(f'mlp {n_layers} layer', net, mse_loss_and_grads)
 
 # Check 2: both PPO losses
 n = 64

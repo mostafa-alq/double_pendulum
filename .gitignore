@@ -12,8 +12,9 @@ env/
 *.gif
 !outputs/balance/progress/*.gif
 !outputs/balance/progress/*.png
+!outputs/swingup/progress/*.gif
+!outputs/swingup/progress/*.png
 
 # Training checkpoints and archived runs (regenerate with train.py)
 outputs/*/checkpoints/
 outputs/previous_run/
-outputs/swingup/
