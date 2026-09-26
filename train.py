@@ -155,6 +155,9 @@ def reverse_starts(env, n, seconds, rng):
         F = np.clip(-5 * S[0] - GAME['damping'] * S[1] + rng.normal(0, 3, n), -env.max_force, env.max_force)
         S = physics_step(S, F, env.dt, env.p)
     S[[1, 3, 5]] *= -1
+    # Put the cart anywhere and moving so it practises getting back to the middle
+    S[0] = np.clip(S[0] + rng.uniform(-2, 2, n), -3, 3)
+    S[1] += rng.uniform(-1, 1, n)
     return S
 
 
