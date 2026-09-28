@@ -1,4 +1,5 @@
 import csv
+import json
 import os
 import shutil
 import sys
@@ -35,17 +36,18 @@ TASKS = {
                  energy_cost=1.0, center_cost=1.0, alive_bonus=5.0),
         # Some start near the top so it keeps practising the balance
         top_start_fraction=0.2,
-        # Starts are reversed falls from the top, level is how many seconds of fall, growing each pass
-        curriculum=dict(start=0.1, growth=1.25, end=20.0, pass_rate=0.7, pool=2048, rewarm=10),
+        # Starts are reversed falls from the top, level is how many seconds of fall, growing each pass.
+        # Some always start hanging still, since the curriculum may never get all the way down
+        curriculum=dict(start=0.1, growth=1.25, end=20.0, pass_rate=0.7, pool=2048, rewarm=10, bottom_fraction=0.3),
         # Trained from scratch, since the balance network sits on a knife edge that any update knocks off
         warm_start=None, critic_warmup=0, actor_lr=3e-4,
         # Two hidden layers, since swinging up, catching and stopping the cart is a lot for one
-        iterations=5000, checkpoint_every=25, hidden=64, layers=2, gamma=0.99, init_std=0.3,
+        iterations=8000, checkpoint_every=25, hidden=64, layers=2, gamma=0.99, init_std=0.3,
         # Noise never drops below this so it keeps exploring and stays smooth
         min_std=0.1,
         eval_seconds=30, eval_hold=5,
         render_start=[0.0, 0.0, 0.05, 0.0, -0.05, 0.0], render_seconds=30,
-        render_iterations=[0, 400, 1225, 2600, 4400, 5000],
+        render_iterations=[0, 725, 2025, 4325, 6725, 7500],
     ),
 }
 
@@ -72,6 +74,7 @@ def paths(task):
         'checkpoints': os.path.join(base, 'checkpoints'),
         'progress': os.path.join(base, 'progress'),
         'log': os.path.join(base, 'training_log.csv'),
+        'state': os.path.join(base, 'trainer_state.npz'),
     }
 
 
@@ -172,10 +175,12 @@ def reverse_starts(env, n, seconds, rng):
 
 
 # Reset pendulums, from a pool of starts if given, with some kept near the top
-def reset_envs(env, idx, rng, top_fraction, pool=None):
+# and bottom_fraction of them keeping the normal start, hanging still at the bottom
+def reset_envs(env, idx, rng, top_fraction, pool=None, bottom_fraction=0.0):
     env.reset(idx)
     if pool is not None:
-        env.state[:, idx] = pool[:, rng.integers(pool.shape[1], size=len(idx))]
+        from_pool = idx[rng.random(len(idx)) >= bottom_fraction] if bottom_fraction else idx
+        env.state[:, from_pool] = pool[:, rng.integers(pool.shape[1], size=len(from_pool))]
     top = idx[rng.random(len(idx)) < top_fraction]
     env.state[2, top] = np.pi + rng.uniform(-0.15, 0.15, len(top))
     env.state[4, top] = np.pi + rng.uniform(-0.15, 0.15, len(top))
@@ -283,20 +288,55 @@ def run_eval(task, actor, n, seed, pool=None):
 # Keep the best checkpoint since PPO can get worse near the end
 def select_best(task, n=100, seed=321):
     out = paths(task)
-    files = sorted(f for f in os.listdir(out['checkpoints']) if f.endswith('.npz'))
+    # The current policy is scored too, so it's only replaced by something better
     best_score, best_file = None, None
+    if os.path.exists(out['policy']):
+        success, up, wall = run_eval(task, load_policy(out['policy']), n, seed)
+        print(f'current policy: success {success:4.0%}  upright {up:5.1f}s  touched wall {wall:4.0%}', flush=True)
+        best_score = (success, up)
+    files = sorted(f for f in os.listdir(out['checkpoints']) if f.endswith('.npz'))
     for f in files:
         success, up, wall = run_eval(task, load_policy(os.path.join(out['checkpoints'], f)), n, seed)
         print(f'{f}: success {success:4.0%}  upright {up:5.1f}s  touched wall {wall:4.0%}', flush=True)
-        if best_score is None or (success, up) >= best_score:
+        if best_score is None or (success, up) > best_score:
             best_score, best_file = (success, up), f
-    shutil.copyfile(os.path.join(out['checkpoints'], best_file), out['policy'])
-    print(f'best: {best_file} -> {out["policy"]}')
+    if best_file:
+        shutil.copyfile(os.path.join(out['checkpoints'], best_file), out['policy'])
+        print(f'best: {best_file} -> {out["policy"]}')
+    else:
+        print('best: kept the current policy')
     return best_file
 
 
-# Training loop
-def train(task, seed=0):
+# Everything needed to carry on training exactly where it stopped, including Adam's running averages.
+# Starting Adam from scratch on a trained network moves every weight at once and wrecks it
+def save_state(path, it, level, actor_frozen_until, actor, critic, actor_opt, critic_opt, rng):
+    data = {'iteration': it, 'level': np.nan if level is None else level,
+            'actor_frozen_until': actor_frozen_until, 'rng': json.dumps(rng.bit_generator.state),
+            'actor_t': actor_opt.t, 'critic_t': critic_opt.t}
+    for name, net, opt in (('actor', actor, actor_opt), ('critic', critic, critic_opt)):
+        for k in net.params:
+            data[f'{name}_p_{k}'] = net.params[k]
+            data[f'{name}_m_{k}'] = opt.m[k]
+            data[f'{name}_v_{k}'] = opt.v[k]
+    np.savez(path, **data)
+
+
+def load_state(path, actor, critic, actor_opt, critic_opt, rng):
+    data = np.load(path)
+    for name, net, opt in (('actor', actor, actor_opt), ('critic', critic, critic_opt)):
+        for k in net.params:
+            net.params[k][...] = data[f'{name}_p_{k}']
+            opt.m[k] = data[f'{name}_m_{k}']
+            opt.v[k] = data[f'{name}_v_{k}']
+    actor_opt.t, critic_opt.t = int(data['actor_t']), int(data['critic_t'])
+    rng.bit_generator.state = json.loads(str(data['rng']))
+    level = None if np.isnan(data['level']) else float(data['level'])
+    return int(data['iteration']), level, int(data['actor_frozen_until'])
+
+
+# Training loop, resume=True carries on from the saved state for extra_iterations more
+def train(task, seed=0, resume=False, extra_iterations=None):
     # Setup
     cfg = TASKS[task]
     out = paths(task)
@@ -312,28 +352,36 @@ def train(task, seed=0):
     actor_opt = Adam(actor.params, cfg['actor_lr'])
     critic_opt = Adam(critic.params, LR)
 
-    # Log file
-    os.makedirs(out['checkpoints'], exist_ok=True)
-    save_policy(actor, checkpoint_path(task, 0))
-    log_file = open(out['log'], 'w', newline='')
-    log = csv.writer(log_file)
-    log.writerow(['iteration', 'env_steps', 'episode_return', 'episode_seconds', 'upright_seconds',
-                  'eval_success', 'eval_upright_seconds', 'level', 'level_success', 'noise_std', 'wall_seconds'])
-
     top_fraction = cfg['top_start_fraction']
     cur = cfg['curriculum']
     level = cur['start'] if cur else None
-    pool = reverse_starts(env, cur['pool'], level, rng) if cur else None
-    obs = observe(reset_envs(env, np.arange(N_ENVS), rng, top_fraction, pool))
     # The actor waits until the critic's guesses are good, or it learns from bad ones and falls apart
     actor_frozen_until = cfg['critic_warmup']
+    first_it = 1
+    if resume:
+        last_it, level, actor_frozen_until = load_state(out['state'], actor, critic, actor_opt, critic_opt, rng)
+        first_it = last_it + 1
+    last_it = first_it - 1 + (extra_iterations or cfg['iterations'])
+
+    # Log file, added to when resuming
+    os.makedirs(out['checkpoints'], exist_ok=True)
+    log_file = open(out['log'], 'a' if resume else 'w', newline='')
+    log = csv.writer(log_file)
+    if not resume:
+        save_policy(actor, checkpoint_path(task, 0))
+        log.writerow(['iteration', 'env_steps', 'episode_return', 'episode_seconds', 'upright_seconds',
+                      'eval_success', 'eval_upright_seconds', 'level', 'level_success', 'noise_std', 'wall_seconds'])
+
+    pool = reverse_starts(env, cur['pool'], level, rng) if cur else None
+    bottom_fraction = cur.get('bottom_fraction', 0.0) if cur else 0.0
+    obs = observe(reset_envs(env, np.arange(N_ENVS), rng, top_fraction, pool, bottom_fraction))
     ep_return = np.zeros(N_ENVS)
     ep_len = np.zeros(N_ENVS)
     ep_upright = np.zeros(N_ENVS)
     recent = []
     start_time = time.time()
 
-    for it in range(1, cfg['iterations'] + 1):
+    for it in range(first_it, last_it + 1):
         b_obs = np.zeros((ROLLOUT, N_ENVS, N_OBS))
         b_act, b_logp, b_rew, b_done, b_val = (np.zeros((ROLLOUT, N_ENVS)) for _ in range(5))
 
@@ -367,7 +415,7 @@ def train(task, seed=0):
                 ep_return[idx] = 0
                 ep_len[idx] = 0
                 ep_upright[idx] = 0
-                next_obs[idx] = observe(reset_envs(env, idx, rng, top_fraction, pool)[:, idx])
+                next_obs[idx] = observe(reset_envs(env, idx, rng, top_fraction, pool, bottom_fraction)[:, idx])
             obs = next_obs
 
         # Advantages, how much better each action did than the critic expected
@@ -433,7 +481,7 @@ def train(task, seed=0):
                           f'{level_now:.2f}', f'{level_success:.3f}', f'{std:.4f}', f'{elapsed:.0f}'])
             log_file.flush()
             save_policy(actor, checkpoint_path(task, it))
-            save_policy(actor, out['policy'])
+            save_state(out['state'], it, level, actor_frozen_until, actor, critic, actor_opt, critic_opt, rng)
             level_text = f'level {level_now:5.2f}s pass {level_success:4.0%}  ' if cur else ''
             print(f'iter {it:4d}  steps {steps_done:8d}  episode return {mean_ret:8.1f}  '
                   f'upright {mean_up * env.dt:5.2f}s  test: upright {eval_up:5.2f}s, '
@@ -497,13 +545,18 @@ if __name__ == '__main__':
         render(args[1], chosen)
     elif len(args) == 2 and args[0] == 'select' and args[1] in TASKS:
         select_best(args[1])
-    elif len(args) == 1 and args[0] in TASKS:
-        train(args[0])
-        select_best(args[0])
-        cfg = TASKS[args[0]]
+    elif (len(args) == 1 and args[0] in TASKS) or (len(args) in (2, 3) and args[0] == 'resume' and args[1] in TASKS):
+        task = args[-1] if args[0] != 'resume' else args[1]
+        if args[0] == 'resume':
+            train(task, resume=True, extra_iterations=int(args[2]) if len(args) == 3 else None)
+        else:
+            train(task)
+        select_best(task)
+        cfg = TASKS[task]
         print(f'best policy: never touched the wall and upright for the last {cfg["eval_hold"]}s '
-              f'of a {cfg["eval_seconds"]}s run: {evaluate(args[0], load_policy(paths(args[0])["policy"])):.0%}')
+              f'of a {cfg["eval_seconds"]}s run: {evaluate(task, load_policy(paths(task)["policy"])):.0%}')
     else:
         print('usage: python train.py balance|swingup\n'
+              '       python train.py resume balance|swingup [extra iterations]\n'
               '       python train.py select balance|swingup\n'
               '       python train.py render balance|swingup [iterations...]')
