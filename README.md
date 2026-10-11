@@ -10,7 +10,7 @@ Run `python game.py` to play. Push the cart with the arrow keys, or press S to l
 
 ## AI usage
 
-Like most developers nowadays, I used Claude to help with this project, but I plan on being honest about it as I did not want to delegate my thinking to a chatbot; I learnt the underlying fundamentals of neural networks and wrote the neural network  in `neural.py` by myself, by hand, so I can actually understand how it works. However, the training environment was done by Claude, though I was directing the training and decided what to try next and tested the results myself. 
+Like most developers nowadays, I used Claude to help with this project, but I plan on being honest about it as I did not want to delegate my thinking to a chatbot. I wrote the original double pendulum in `fixed_simulation.py` and the physics for the cart version in `physics.py` myself, setting up the Lagrangian and deriving the equations of motion with sympy. I also learnt the fundamentals of neural networks and wrote the neural network in `neural.py` by hand so I can actually understand how it works, and I made the base of the game in pygame. Claude wrote the RK4 step, a lot of the game UI on top of what I made and the training environment in `train.py` and `cart_env.py`, though I was directing the training and decided what to try next and which version to keep.
 
 ## How it works
 
