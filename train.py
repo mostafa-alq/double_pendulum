@@ -40,14 +40,16 @@ TASKS = {
         # Some always start hanging still, since the curriculum may never get all the way down
         curriculum=dict(start=0.1, growth=1.25, end=20.0, pass_rate=0.7, pool=2048, rewarm=10, bottom_fraction=0.3),
         # Trained from scratch, since the balance network sits on a knife edge that any update knocks off
-        warm_start=None, critic_warmup=0, actor_lr=3e-4,
-        # Two hidden layers, since swinging up, catching and stopping the cart is a lot for one
-        iterations=8000, checkpoint_every=25, hidden=64, layers=2, gamma=0.99, init_std=0.3,
+        warm_start=None, critic_warmup=30, actor_lr=3e-4,
+        # Two hidden layers, since swinging up, catching and stopping the cart is a lot for one.
+        # Ran 8000 iterations at gamma 0.99, then 2000 at 0.995 and 2000 at 0.998 so getting up sooner is worth more.
+        # The fastest reliable checkpoint was 10225
+        iterations=8000, checkpoint_every=25, hidden=64, layers=2, gamma=0.998, init_std=0.3,
         # Noise never drops below this so it keeps exploring and stays smooth
         min_std=0.1,
         eval_seconds=30, eval_hold=5,
         render_start=[0.0, 0.0, 0.05, 0.0, -0.05, 0.0], render_seconds=30,
-        render_iterations=[0, 725, 2025, 4325, 6725, 7500],
+        render_iterations=[0, 725, 2025, 4325, 7500, 10225],
     ),
 }
 
@@ -361,6 +363,8 @@ def train(task, seed=0, resume=False, extra_iterations=None):
     if resume:
         last_it, level, actor_frozen_until = load_state(out['state'], actor, critic, actor_opt, critic_opt, rng)
         first_it = last_it + 1
+        # Settings may have changed, so the critic catches up before the actor moves again
+        actor_frozen_until = max(actor_frozen_until, last_it + cfg['critic_warmup'])
     last_it = first_it - 1 + (extra_iterations or cfg['iterations'])
 
     # Log file, added to when resuming
