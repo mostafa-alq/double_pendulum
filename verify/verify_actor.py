@@ -12,8 +12,7 @@ torch.manual_seed(0)
 
 actor = Actor()
 
-# A batch of 5 fake states -- shape (5, 6), matching [x, v, theta1, z1, theta2, z2].
-# Values don't need to be physically real here, just the right shape.
+# 5 fake states, only the shape matters
 states = torch.randn(5, 6)
 
 dist = actor(states)

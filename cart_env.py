@@ -3,18 +3,7 @@ import numpy as np
 from physics import step as physics_step, Params, total_energy
 
 
-# n=None runs one pendulum (state shape (6,)); n=k runs k pendulums at once (state shape (6, k)).
-# start_angle=np.pi starts upright (balancing); start_angle=0 starts hanging down (swing-up).
-# wall_crash=True treats hitting the track limit like falling (-50, episode over). Training needs it:
-# the wall stops the cart instantly without affecting the pendulum, a free brake a policy learns to abuse.
-# wall_cost is a softer option: a penalty for every step the cart is touching the wall, episode carries on.
-# energy_cost penalises the gap between the total energy and the energy of standing still at the top,
-# so hanging (too little) and spinning (too much) both cost points.
-# center_cost is how strongly the cart is pulled back towards the middle of the track.
-# fall_after_catch=True only counts a fall once the pendulum has been near upright, so a start from
-# below can swing up freely but dropping it after catching it still ends the episode.
-# alive_bonus is added every step. If steps can score below zero, ending the episode early by crashing
-# looks better than carrying on, so a bonus that keeps every step at zero or above removes that shortcut.
+# Training environment, runs one pendulum or n of them at once
 class CartDoublePendulumEnv:
     def __init__(self, n=None, dt=0.01, max_steps=1000, x_max=2.4, max_force=30.0,
                  fall_angle=np.pi / 2, perturb=0.15, start_angle=np.pi, damping=15.0, wall_crash=False,
@@ -57,6 +46,7 @@ class CartDoublePendulumEnv:
         self.caught[idx] = False
         return self.state.copy()
 
+    # Push the cart, move the physics on one step and score it
     def step(self, action):
         action = np.asarray(action, dtype=float)
         F = np.where(action == 0, -self.damping * self.state[1],
@@ -64,18 +54,21 @@ class CartDoublePendulumEnv:
         self.state = physics_step(self.state, F, self.dt, self.p)
         self.steps += 1
 
+        # Stop the cart dead at the end of the track
         hit_wall = np.abs(self.state[0]) > self.x_max
         self.state[0] = np.where(hit_wall, np.sign(self.state[0]) * self.x_max, self.state[0])
         self.state[1] = np.where(hit_wall, 0.0, self.state[1])
 
+        # Points for being upright and near the middle
         x, v, the1, z1, the2, z2 = self.state
-        reward = self.alive_bonus - np.cos(the1) - np.cos(the2) - self.center_cost * (x / self.x_max) ** 2
+        reward =self.alive_bonus - np.cos(the1) - np.cos(the2) - self.center_cost * (x / self.x_max) ** 2
         if self.energy_cost:
             p = self.p
             energy = total_energy(self.state.T, p.g, p.M, p.m1, p.m2, p.l1, p.l2)
-            # Capped at the hanging-still gap so fast spinning can't push a step below zero
+            # Lose points for having the wrong energy to stand at the top
             reward = reward - self.energy_cost * np.minimum(np.abs(energy - self.top_energy) / self.top_energy, 2.0)
 
+        # Check if it fell or crashed
         dev1 = (the1 % (2 * np.pi)) - np.pi
         dev2 = (the2 % (2 * np.pi)) - np.pi
         fell = (np.abs(dev1) > self.fall_angle) | (np.abs(dev2) > self.fall_angle)

@@ -4,17 +4,14 @@ import sys
 import numpy as np
 from scipy.integrate import odeint
 
-# This script lives in verify/, but physics.py and visualize.py live one
-# level up in the project root -- Python only looks in this file's own
-# directory by default, so we have to add the root to sys.path ourselves.
+# Lets this file import from the main folder
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 OUTPUT_DIR = os.path.join(_ROOT, 'outputs')
 
 from physics import dSdt, total_energy, Params, step
 
-# Phase 1 check: with F=0, total energy should stay ~constant.
-# Phase 2 check: the RK4 step() loop should reproduce the odeint trajectory at short horizons, and any long-horizon divergence should be explained by the double pendulum's chaos, not a bug in step().
+# Energy should stay the same with no force, and RK4 should match odeint
 
 g_val = 9.80665
 M_val = 1.0
@@ -45,17 +42,18 @@ for i in range(n_steps):
 
 diff = np.abs(ans_rk4 - ans)
 print(f'\nPhase 2 check: RK4 step() loop vs. single-call odeint (dt={dt:.4f}, {n_steps} steps)')
-for idx in (50, 100, 200, 500, 1000, 2000):  # t = 0.5s, 1s, 2s, 5s, 10s, 20s
+# 0.5, 1, 2, 5, 10 and 20 seconds
+for idx in (50, 100, 200, 500, 1000, 2000):
     print(f'  t={t_arr[idx]:5.1f}s  max abs diff so far: {np.max(diff[:idx + 1]):.6e}')
 
 E_rk4 = total_energy(ans_rk4, g_val, M_val, m1_val, m2_val, l1_val, l2_val)
 print(f'RK4 energy drift over run: {np.max(np.abs(E_rk4 - E_rk4[0])):.6e}')
 
-# The double pendulum is inherently chaotic: nudge the odeint initial condition by a tiny epsilon and see if it diverges from the original odeint run by a similar order of magnitude
+# It's chaotic, so a tiny nudge should drift apart by about the same amount
 
 eps = 1e-8
 S0_nudged = np.array(S0, dtype=float)
-S0_nudged[2] += eps  # nudge theta1 by a tiny amount
+S0_nudged[2] += eps
 ans_nudged = odeint(dSdt, y0=S0_nudged, t=t_arr,
                      args=(g_val, M_val, m1_val, m2_val, l1_val, l2_val, F_val))
 chaos_diff = np.abs(ans_nudged - ans)

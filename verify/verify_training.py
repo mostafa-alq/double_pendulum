@@ -11,7 +11,7 @@ from train import MLP, actor_loss_and_grads, critic_loss_and_grads, gaussian_log
 EPS = 1e-6
 
 
-# The same nudge-up/nudge-down check as neural.py's check_gradients()
+# Same gradient check as in neural.py
 def check(label, net, loss_and_grads):
     _, grads = loss_and_grads()
     for name, p in net.params.items():
@@ -30,7 +30,7 @@ def check(label, net, loss_and_grads):
 
 rng = np.random.default_rng(1)
 
-# Check 1: the network's backprop on a plain squared-error loss, with one and with two hidden layers
+# Check backprop with one and two hidden layers
 x = rng.normal(size=(20, 8))
 targets = rng.normal(size=(20, 3))
 for n_layers in (1, 2):
@@ -42,7 +42,7 @@ for n_layers in (1, 2):
 
     check(f'mlp {n_layers} layer', net, mse_loss_and_grads)
 
-# Check 2: both PPO losses
+# Check both PPO losses
 n = 64
 obs = rng.normal(size=(n, 8))
 actor = MLP(8, 16, 1, rng)
@@ -57,7 +57,7 @@ returns = rng.normal(size=n)
 check('actor', actor, lambda: actor_loss_and_grads(actor, obs, act, logp_old, adv))
 check('critic', critic, lambda: critic_loss_and_grads(critic, obs, returns))
 
-# Check 3: many pendulums at once behave exactly like the same pendulums run one at a time
+# Many pendulums at once should match running them one by one
 n_env = 8
 batch = CartDoublePendulumEnv(n=n_env, rng=rng)
 batch.reset()

@@ -49,7 +49,7 @@ le2 = smp.diff(L, the2) - smp.diff(smp.diff(L, the2_d), t).simplify()
 
 sols = smp.solve([le1, le2, lex + F], (the1_dd, the2_dd, x_dd), simplify=False, rational=False)
 
-# Sanity check: x itself should not appear in any solved acceleration - only x_dot should, since no potential energy depends on cart position
+# Check that the cart position never shows up in the accelerations
 for name, expr in [('the1_dd', sols[the1_dd]), ('the2_dd', sols[the2_dd]), ('x_dd', sols[x_dd])]:
     assert x not in expr.free_symbols, f'{name} unexpectedly depends on x itself: {expr}'
 print('Sanity check passed: none of the solved accelerations depend on cart position x.')

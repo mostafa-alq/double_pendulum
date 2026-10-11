@@ -29,23 +29,18 @@ TASKS = {
     ),
     # Start at the bottom, swing up and balance
     'swingup': dict(
-        # Hitting the wall or dropping it after catching it ends the episode, energy away from the
-        # balanced top costs points, and a stronger pull to the middle.
-        # The alive bonus keeps every step at zero or above so ending early never pays
+        # Hitting the wall or dropping it ends the episode
         env=dict(start_angle=0.0, perturb=0.1, fall_after_catch=True, max_steps=1800, wall_crash=True,
                  energy_cost=1.0, center_cost=1.0, alive_bonus=5.0),
         # Some start near the top so it keeps practising the balance
         top_start_fraction=0.2,
-        # Starts are reversed falls from the top, level is how many seconds of fall, growing each pass.
-        # Some always start hanging still, since the curriculum may never get all the way down
+        # Starts get further from the top each time it passes a level
         curriculum=dict(start=0.1, growth=1.25, end=20.0, pass_rate=0.7, pool=2048, rewarm=10, bottom_fraction=0.3),
-        # Trained from scratch, since the balance network sits on a knife edge that any update knocks off
+        # Starts from scratch, not from the balance network
         warm_start=None, critic_warmup=30, actor_lr=3e-4,
-        # Two hidden layers, since swinging up, catching and stopping the cart is a lot for one.
-        # Ran 8000 iterations at gamma 0.99, then 2000 at 0.995 and 2000 at 0.998 so getting up sooner is worth more.
-        # The fastest reliable checkpoint was 10225
+        # Gamma was 0.99 for 8000 iterations, then raised to make it swing up faster
         iterations=8000, checkpoint_every=25, hidden=64, layers=2, gamma=0.998, init_std=0.3,
-        # Noise never drops below this so it keeps exploring and stays smooth
+        # Keeps some noise so it keeps exploring
         min_std=0.1,
         eval_seconds=30, eval_hold=5,
         render_start=[0.0, 0.0, 0.05, 0.0, -0.05, 0.0], render_seconds=30,
@@ -160,8 +155,7 @@ def observe(state):
                      np.sin(the2), np.cos(the2), z2 / 10], axis=-1)
 
 
-# Fall from the top for some seconds while braking the cart, then flip every velocity.
-# Played backwards the same pushes carry it back up, so every start has a known way to the top
+# Let it fall from the top then flip the velocities, so it starts swinging back up
 def reverse_starts(env, n, seconds, rng):
     S = np.zeros((6, n))
     S[2] = np.pi + rng.uniform(-0.05, 0.05, n)
@@ -176,8 +170,7 @@ def reverse_starts(env, n, seconds, rng):
     return S
 
 
-# Reset pendulums, from a pool of starts if given, with some kept near the top
-# and bottom_fraction of them keeping the normal start, hanging still at the bottom
+# Reset pendulums, some near the top and some hanging at the bottom
 def reset_envs(env, idx, rng, top_fraction, pool=None, bottom_fraction=0.0):
     env.reset(idx)
     if pool is not None:
@@ -264,7 +257,7 @@ def evaluate(task, actor, n=200, seed=123):
     return run_eval(task, actor, n, seed)[0]
 
 
-# Returns success rate, seconds upright and how many touched the wall. Success means upright at the end and never touching the wall
+# Success rate, seconds upright and how often it touched the wall
 def run_eval(task, actor, n, seed, pool=None):
     cfg = TASKS[task]
     rng = np.random.default_rng(seed)
@@ -310,8 +303,7 @@ def select_best(task, n=100, seed=321):
     return best_file
 
 
-# Everything needed to carry on training exactly where it stopped, including Adam's running averages.
-# Starting Adam from scratch on a trained network moves every weight at once and wrecks it
+# Save everything needed to carry on training later
 def save_state(path, it, level, actor_frozen_until, actor, critic, actor_opt, critic_opt, rng):
     data = {'iteration': it, 'level': np.nan if level is None else level,
             'actor_frozen_until': actor_frozen_until, 'rng': json.dumps(rng.bit_generator.state),
@@ -357,13 +349,13 @@ def train(task, seed=0, resume=False, extra_iterations=None):
     top_fraction = cfg['top_start_fraction']
     cur = cfg['curriculum']
     level = cur['start'] if cur else None
-    # The actor waits until the critic's guesses are good, or it learns from bad ones and falls apart
+    # Let the critic learn before the actor starts updating
     actor_frozen_until = cfg['critic_warmup']
     first_it = 1
     if resume:
         last_it, level, actor_frozen_until = load_state(out['state'], actor, critic, actor_opt, critic_opt, rng)
         first_it = last_it + 1
-        # Settings may have changed, so the critic catches up before the actor moves again
+        # Give the critic time to catch up after a resume
         actor_frozen_until = max(actor_frozen_until, last_it + cfg['critic_warmup'])
     last_it = first_it - 1 + (extra_iterations or cfg['iterations'])
 
@@ -464,7 +456,7 @@ def train(task, seed=0, resume=False, extra_iterations=None):
                 mean_ret = mean_len = mean_up = float('nan')
             std = np.exp(actor.params['log_std'][0])
             eval_success, eval_up, _ = run_eval(task, actor, n=32, seed=it)
-            # How well the critic predicts returns, 1 is perfect and 0 is no better than the average
+            # How well the critic predicts returns, 1 is perfect
             critic_fit = 1 - np.var(f_ret - b_val.ravel()) / (np.var(f_ret) + 1e-8)
 
             # Test at the current level and make the falls longer if it passes
@@ -475,7 +467,7 @@ def train(task, seed=0, resume=False, extra_iterations=None):
                 if level_success >= cur['pass_rate'] and level < cur['end']:
                     level = min(level * cur['growth'], cur['end'])
                     pool = reverse_starts(env, cur['pool'], level, rng)
-                    # New starts, so give the critic time to catch up again
+                    # Give the critic time to catch up
                     actor_frozen_until = max(actor_frozen_until, it + cur['rewarm'])
 
             elapsed = time.time() - start_time

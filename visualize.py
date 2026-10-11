@@ -7,7 +7,8 @@ def animate_trajectory(states, dt, l1, l2, series=None, x_max=None,
                         fps=25, save_path='animation.gif', title=None,
                         fixed_camera=False):
     n = len(states)
-    stride = max(1, round(1 / (dt * fps)))  # ~real-time playback
+    # Skip frames so it plays in real time
+    stride = max(1, round(1 / (dt * fps)))
     frame_idx = np.arange(0, n, stride)
     t_arr = np.arange(n) * dt
 
@@ -20,9 +21,13 @@ def animate_trajectory(states, dt, l1, l2, series=None, x_max=None,
     x2 = x1 + l2 * np.sin(the2)
     y2 = y1 - l2 * np.cos(the2)
 
+    # Make the figure fit the track so there's no empty space
+    reach = l1 + l2
+    view_w = 2 * (x_max + reach) if fixed_camera and x_max is not None else 2 * (reach + 1)
+    main_h = 8 * (2 * reach + 1) / view_w
     n_series = len(series) if series else 0
-    fig = plt.figure(figsize=(8, 8 + 2 * n_series))
-    gs = fig.add_gridspec(1 + n_series, 1, height_ratios=[4] + [1] * n_series, hspace=0.4)
+    fig = plt.figure(figsize=(8, main_h + 0.6 + 1.6 * n_series), layout='constrained')
+    gs = fig.add_gridspec(1 + n_series, 1, height_ratios=[main_h] + [1.2] * n_series)
 
     ax_main = fig.add_subplot(gs[0])
     ax_main.set_facecolor('k')
@@ -32,16 +37,17 @@ def animate_trajectory(states, dt, l1, l2, series=None, x_max=None,
     if title:
         ax_main.set_title(title)
 
-    reach = l1 + l2
     if fixed_camera:
         if x_max is None:
             raise ValueError('fixed_camera=True needs x_max, to know how much rail to show')
         ax_main.set_xlim(-x_max - reach, x_max + reach)
     else:
-        ax_main.set_xlim(x[0] - reach - 1, x[0] + reach + 1)  # starting point -- update() moves this each frame
+        # Camera starts on the cart
+        ax_main.set_xlim(x[0] - reach - 1, x[0] + reach + 1)
     ax_main.set_ylim(-reach - 0.5, reach + 0.5)
 
-    ax_main.axhline(0, color='w', lw=1)  # rail
+    # Rail
+    ax_main.axhline(0, color='w', lw=1)
     if x_max is not None:
         ax_main.axvline(-x_max, color='r', lw=1, ls='--')
         ax_main.axvline(x_max, color='r', lw=1, ls='--')
@@ -67,7 +73,8 @@ def animate_trajectory(states, dt, l1, l2, series=None, x_max=None,
 
     def update(i):
         if not fixed_camera:
-            ax_main.set_xlim(x[i] - reach - 1, x[i] + reach + 1)  # camera follows the cart
+            # Camera follows the cart
+            ax_main.set_xlim(x[i] - reach - 1, x[i] + reach + 1)
         cart_patch.set_xy((x[i] - cart_w / 2, -cart_h / 2))
         link_line.set_data([x[i], x1[i], x2[i]], [0, y1[i], y2[i]])
         for cursor in cursor_lines:

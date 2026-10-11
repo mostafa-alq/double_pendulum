@@ -3,8 +3,7 @@ import sys
 
 import numpy as np
 
-# See verify_physics.py for why this path fix is needed -- this script
-# moved into verify/, but cart_env.py and visualize.py live in the root.
+# Lets this file import from the main folder
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 OUTPUT_DIR = os.path.join(_ROOT, 'outputs')
@@ -31,14 +30,12 @@ def rollout(env, action_fn, seed=None):
 if __name__ == '__main__':
     env = CartDoublePendulumEnv()
 
-    # Check 1: no force at all -- upright is unstable, so this should end
-    # in a fall, at roughly the same timescale Phase 3 saw (~1.7s).
+    # No force, should fall over
     states_zero, forces_zero, info_zero = rollout(env, lambda s: 0.0, seed=0)
     print(f'F=0 rollout: ended after {len(forces_zero)} steps '
           f'({len(forces_zero) * env.dt:.2f}s), info={info_zero}')
 
-    # Check 2: constant max force -- should push the cart off the track
-    # quickly, before the pendulum has much time to fall.
+    # Full force, should hit the end of the track quickly
     states_push, forces_push, info_push = rollout(env, lambda s: env.max_force, seed=0)
     print(f'F=max rollout: ended after {len(forces_push)} steps '
           f'({len(forces_push) * env.dt:.2f}s), info={info_push}')
@@ -51,8 +48,7 @@ if __name__ == '__main__':
         save_path=os.path.join(OUTPUT_DIR, 'cart_env_push.gif'),
     )
 
-    # Check 3: the Phase 3 P-controller, now bounded by the track limit --
-    # a longer, more watchable run than either check above.
+    # Simple controller with the track limits on
     k = 50.0
     p_control = lambda s: -k * (s[2] - np.pi)
     states_p, forces_p, info_p = rollout(env, p_control, seed=0)

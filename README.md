@@ -8,13 +8,15 @@ A double pendulum on a cart, simulated from scratch, with a neural network that 
 
 Run `python game.py` to play. Push the cart with the arrow keys, or press S to let the AI swing it up and A to let it balance. H drops it back to the bottom and R stands it up.
 
+## AI usage
+
+Like most developers nowadays, I used Claude to help with this project, but I plan on being honest about it. I did not want to delegate my thinking to a chatbot; I learnt the underlying fundamentals of neural networks and wrote the neural network  in `neural.py` by myself, by hand, so I can actually understand how it works. However, the training environment was done by Claude, though I was directing the training, decided what to try next and tested the results myself. 
+
 ## How it works
 
-The physics comes from Lagrangian mechanics. I derived the equations of motion with sympy and step them forward with RK4. The cart can push with up to 30 N and has 12 m of track to work with.
+I worked out the equations of motion with Lagrangian mechanics, using sympy to do the algebra, and the simulation steps them forward with RK4.
 
-I wrote my first neural network by hand in `neural.py` to learn how forward passes and backprop actually work. `train.py` uses the same ideas in numpy to train the controllers with PPO. The network sees where the cart is and how the arms are moving, and decides what force to push with.
-
-Balancing was the easy part. Swinging up was much harder, so it learns backwards. It starts by catching the pendulum just after it tips over from the top, then from longer and longer falls, until it can get all the way up from hanging still. It now makes it up about 98% of the time, usually in around 6 seconds.
+Training it to be able to balance didn't take long, but the swing-up took a lot of attempts. What finally worked was training it backwards: start it just past the top so it only has to catch it, then gradually start it further and further down until it's starting from hanging still. It gets up about 98% of the time now, and usually takes around 6 seconds.
 
 ![Learning curve](outputs/swingup/progress/learning_curve.png)
 

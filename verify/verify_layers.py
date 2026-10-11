@@ -27,22 +27,24 @@ def numerical_gradient(f, param, eps=1e-5):
         param[idx] = orig - eps
         f_minus = f()
 
-        param[idx] = orig  # restore
+        # Put it back
+        param[idx] = orig
         grad[idx] = (f_plus - f_minus) / (2 * eps)
     return grad
 
 
 if __name__ == '__main__':
     layer = Linear(in_dim=4, out_dim=3)
-    x = np.random.randn(5, 4)  # batch of 5 examples, 4 features each
+    # 5 examples with 4 inputs each
+    x = np.random.randn(5, 4)
 
-    # A stand-in "loss": sum of the layer's output. Simple enough that its
-    # gradient w.r.t. the output is just all-ones -- easy to check by hand.
+    # Loss is just the sum of the outputs so its gradient is all ones
     def loss():
         return layer.forward(x).sum()
 
-    loss()  # populate layer._x for backward()
-    grad_output = np.ones((5, 3))  # d(loss)/d(output), since loss = sum(output)
+    # Forward pass first so backward has its inputs
+    loss()
+    grad_output = np.ones((5, 3))
     grad_x_analytical, grad_W_analytical, grad_b_analytical = layer.backward(grad_output)
 
     grad_W_numerical = numerical_gradient(loss, layer.W)

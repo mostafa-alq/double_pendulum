@@ -20,7 +20,8 @@ DEFAULT_WIDTH, DEFAULT_HEIGHT = (1400, 700)
 WIDTH = pg.display.Info().current_w if FULLSCREEN == True else DEFAULT_WIDTH
 HEIGHT = pg.display.Info().current_h if FULLSCREEN == True else DEFAULT_HEIGHT
 GRAPH_PANEL_WIDTH = 220
-MAIN_WIDTH = WIDTH - GRAPH_PANEL_WIDTH  # pendulum viewport
+# Space left for the pendulum
+MAIN_WIDTH = WIDTH - GRAPH_PANEL_WIDTH
 BG_COLOUR = (0,0,0)
 screen = pg.display.set_mode((WIDTH, HEIGHT))
 running = True
@@ -69,7 +70,7 @@ trail = deque(maxlen=TRAIL_LENGTH)
 theta1_history = deque(maxlen=GRAPH_HISTORY)
 theta2_history = deque(maxlen=GRAPH_HISTORY)
 
-# Trained networks, A for balance and S for swing-up, pressing the same key again turns it off
+# Trained networks
 policies = {
     'balance': load_policy(os.path.join(OUTPUTS, 'balance', 'policy.npz')),
     'swingup': load_policy(os.path.join(OUTPUTS, 'swingup', 'policy.npz')),
